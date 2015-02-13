@@ -51,6 +51,8 @@ define([
 
         this._opaqueClearCommand = new ClearCommand({
             color : new Color(0.0, 0.0, 0.0, 0.0),
+            depth : 1.0,
+            stencil : 0.0,
             owner : this
         });
         this._translucentMRTClearCommand = new ClearCommand({
@@ -120,8 +122,10 @@ define([
         oit._depthTexture = context.createTexture2D({
             width : width,
             height : height,
-            pixelFormat : PixelFormat.DEPTH_COMPONENT,
-            pixelDatatype : PixelDatatype.UNSIGNED_SHORT
+            //pixelFormat : PixelFormat.DEPTH_COMPONENT,
+            //pixelDatatype : PixelDatatype.UNSIGNED_SHORT
+            pixelFormat : PixelFormat.DEPTH_STENCIL,
+            pixelDatatype : PixelDatatype.UNSIGNED_INT_24_8_WEBGL
         });
     }
 
@@ -135,7 +139,8 @@ define([
         if (oit._translucentMRTSupport) {
             oit._translucentFBO = context.createFramebuffer({
                 colorTextures : [oit._accumulationTexture, oit._revealageTexture],
-                depthTexture : oit._depthTexture,
+                //depthTexture : oit._depthTexture,
+                depthStencilTexture : oit._depthTexture,
                 destroyAttachments : false
             });
             oit._adjustTranslucentFBO = context.createFramebuffer({
@@ -153,12 +158,14 @@ define([
         if (!oit._translucentMRTSupport) {
             oit._translucentFBO = context.createFramebuffer({
                 colorTextures : [oit._accumulationTexture],
-                depthTexture : oit._depthTexture,
+                //depthTexture : oit._depthTexture,
+                depthStencilTexture : oit._depthTexture,
                 destroyAttachments : false
             });
             oit._alphaFBO = context.createFramebuffer({
                 colorTextures : [oit._revealageTexture],
-                depthTexture : oit._depthTexture,
+                //depthTexture : oit._depthTexture,
+                depthStencilTexture : oit._depthTexture,
                 destroyAttachments : false
             });
             oit._adjustTranslucentFBO = context.createFramebuffer({
@@ -184,7 +191,8 @@ define([
         if (supported) {
             oit._opaqueFBO = context.createFramebuffer({
                 colorTextures : [oit._opaqueTexture],
-                depthTexture : oit._depthTexture,
+                //depthTexture : oit._depthTexture,
+                depthStencilTexture : oit._depthTexture,
                 destroyAttachments : false
             });
         }

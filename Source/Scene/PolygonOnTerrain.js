@@ -70,6 +70,8 @@ define([
         this._zPassCommand = undefined;
         this._colorInsideSphereCommand = undefined;
         this._colorOutsideSphereCommand = undefined;
+
+        this._scene = options.scene;
     };
 
     var attributeLocations = {
@@ -281,6 +283,10 @@ define([
     }
 
     PolygonOnTerrain.prototype.update = function(context, frameState, commandList) {
+        var fbo = this._scene._oit._opaqueFBO;
+        if (!defined(fbo)) {
+            return;
+        }
 
         if (!defined(this._va)) {
             createShadowVolume(this, context);
@@ -290,13 +296,26 @@ define([
             this._sp = context.createShaderProgram(ShadowVolumeVS, ShadowVolumeFS, attributeLocations);
         }
 
+        if (!defined(this._fbo)) {
+            var colorTexture = fbo.getColorTexture(0);
+            this._fbo = context.createFramebuffer({
+                colorTextures : [colorTexture],
+                destroyAttachments : false
+            });
+            this._depthTexture = fbo.depthStencilTexture;
+        }
+
         if (!defined(this._zFailCommand)) {
+            var that = this;
             var uniformMap = {
                 centralBodyMinimumAltitude : function() {
                     return -8500.0;
                 },
                 LODNegativeToleranceOverDistance : function() {
                     return -0.01;
+                },
+                depthTexture : function() {
+                    return that._depthTexture;
                 }
             };
 
@@ -310,7 +329,7 @@ define([
             var zFailRenderState = context.createRenderState({
                 colorMask : disableColorWrites,
                 stencilTest : {
-                    //enabled : true,
+                    enabled : true,
                     frontFunction : StencilFunction.ALWAYS,
                     frontOperation : {
                         fail : StencilOperation.KEEP,
@@ -327,7 +346,7 @@ define([
                     mask : ~0
                 },
                 depthTest : {
-                    //enabled : true
+                    enabled : true
                 },
                 depthMask : false
             });
@@ -340,13 +359,13 @@ define([
                 uniformMap : uniformMap,
                 owner : this,
                 modelMatrix : Matrix4.IDENTITY,
-                pass : Pass.TRANSLUCENT
+                pass : Pass.OPAQUE
             });
 
             var zPassRenderState = context.createRenderState({
                 colorMask : disableColorWrites,
                 stencilTest : {
-                    //enabled : true,
+                    enabled : true,
                     frontFunction : StencilFunction.ALWAYS,
                     frontOperation : {
                         fail : StencilOperation.KEEP,
@@ -363,7 +382,7 @@ define([
                     mask : ~0
                 },
                 depthTest : {
-                    //enabled : true
+                    enabled : true
                 },
                 depthMask : false
             });
@@ -378,11 +397,11 @@ define([
                 uniformMap : uniformMap,
                 owner : this,
                 modelMatrix : Matrix4.IDENTITY,
-                pass : Pass.TRANSLUCENT
+                pass : Pass.OPAQUE
             });
 
             var colorStencilTest = {
-                //enabled : true,
+                enabled : true,
                 frontFunction : StencilFunction.NOT_EQUAL,
                 frontOperation : {
                     fail : StencilOperation.KEEP,
@@ -402,10 +421,10 @@ define([
             var colorInsideSphereRenderState = context.createRenderState({
                 stencilTest : colorStencilTest,
                 depthTest : {
-                    //enabled : true,
-                    func : DepthFunction.ALWAYS
+                    enabled : false
                 },
-                depthMask : false
+                depthMask : false,
+                blending : BlendingState.ALPHA_BLEND
             });
 
             this._colorInsideCommand = new DrawCommand({
@@ -416,19 +435,20 @@ define([
                 uniformMap : uniformMap,
                 owner : this,
                 modelMatrix : Matrix4.IDENTITY,
-                pass : Pass.TRANSLUCENT
+                pass : Pass.OPAQUE
             });
 
             var colorOutsideSphereRenderState = context.createRenderState({
                 stencilTest : colorStencilTest,
                 cull : {
-                    //enabled : true,
+                    enabled : true,
                     face : CullFace.BACK
                 },
                 depthTest : {
-                    //enabled : true
+                    enabled : false
                 },
-                depthMask : false
+                depthMask : false,
+                blending : BlendingState.ALPHA_BLEND
             });
 
             this._colorOutsideSphereCommand = new DrawCommand({
@@ -441,7 +461,7 @@ define([
                 uniformMap : uniformMap,
                 owner : this,
                 modelMatrix : Matrix4.IDENTITY,
-                pass : Pass.TRANSLUCENT
+                pass : Pass.OPAQUE
             });
         }
 
@@ -449,7 +469,7 @@ define([
         if (pass.render) {
             // intersects near/far plane: z-fail else z-pass
             // inside bounding sphere : colorInsideSphere commands else color outside
-            commandList.push(this._zPassCommand, this._colorOutsideSphereCommand);
+            commandList.push(this._zPassCommand, this._colorInsideCommand);
         }
     };
 

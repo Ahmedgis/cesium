@@ -1196,7 +1196,8 @@ define([
             }
         }
 
-        var useOIT = !picking && renderTranslucentCommands && defined(scene._oit) && scene._oit.isSupported();
+        //var useOIT = !picking && renderTranslucentCommands && defined(scene._oit) && scene._oit.isSupported();
+        var useOIT = true;
         if (useOIT) {
             scene._oit.update(context);
             scene._oit.clear(context, passState, clearColor);

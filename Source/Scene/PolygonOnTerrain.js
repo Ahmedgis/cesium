@@ -92,7 +92,6 @@ define([
         var polygonHierarchy = polygon._polygonHierarchy;
         var ellipsoid = polygon._ellipsoid;
         var granularity = polygon._granularity;
-        //var granularity = CesiumMath.PI_OVER_FOUR;
 
         var results = PolygonGeometryLibrary.polygonsFromHierarchy(polygonHierarchy);
         var positions = results.polygons[0];
@@ -175,11 +174,12 @@ define([
         }
 
         var numWalls = walls.length;
+        var wallPositions;
         var wallLength;
 
         for (i = 0; i < numWalls; ++i) {
             wall = walls[i];
-            var wallPositions = wall.attributes.position.values;
+            wallPositions = wall.attributes.position.values;
             wallLength = wallPositions.length / 2;
 
             for (j = 0; j < wallLength; j += 3) {
@@ -235,7 +235,7 @@ define([
         for (i = 0; i < numWalls; ++i) {
             wall = walls[i];
             var wallIndices = wall.indices;
-            wallLength = wallIndices.length / 2;
+            wallLength = wallIndices.length;
 
             for (j = 0; j < wallLength; ++j) {
                 ibIndices[index++] = wallIndices[j] + offset;
@@ -314,14 +314,13 @@ define([
             this._sp = context.createShaderProgram(ShadowVolumeVS, ShadowVolumeFS, attributeLocations);
         }
 
-        /*
         if (this._zFailCommands.length === 0) {
             var uniformMap = {
                 centralBodyMinimumAltitude : function() {
-                    return -100.0;
+                    return -8500.0;
                 },
                 LODNegativeToleranceOverDistance : function() {
-                    return -2;
+                    return -0.01;
                 }
             };
 
@@ -507,46 +506,6 @@ define([
             var colorPassCommandsLength = colorPassCommands.length;
             for (k = 0; k < colorPassCommandsLength; ++k) {
                 commandList.push(colorPassCommands[k]);
-            }
-        }
-        */
-
-        if (!defined(this._commands)) {
-            this._commands = [];
-
-            this._rs = context.createRenderState({
-                blending : BlendingState.ALPHA_BLEND,
-                depthMask : false,
-                depthTest : {
-                    enabled : false
-                },
-                cull : {
-                    enabled : true,
-                    face : CullFace.BACK
-                }
-            });
-
-            var drawCommands = this._capsAndWalls;
-            var length = drawCommands.length;
-            for (var j = 0; j < length; ++j) {
-                this._commands.push(new DrawCommand({
-                    primitiveType : drawCommands[j].primitiveType,
-                    offset : drawCommands[j].offset,
-                    count : drawCommands[j].count,
-                    vertexArray : this._va,
-                    renderState : this._rs,
-                    shaderProgram : this._sp,
-                    owner : this,
-                    modelMatrix : Matrix4.IDENTITY,
-                    pass : Pass.TRANSLUCENT
-                }));
-            }
-        }
-
-        var pass = frameState.passes;
-        if (pass.render) {
-            for (var k = 0; k < this._commands.length; ++k) {
-                commandList.push(this._commands[k]);
             }
         }
     };

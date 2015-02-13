@@ -11,8 +11,7 @@ void main() {
     //
     // Make sure the vertex is moved down far enough to cover the central body
     //
-    //float delta = min(centralBodyMinimumAltitude, LODNegativeToleranceOverDistance * length(position.xyz));
-    float delta = -1.0;
+    float delta = min(centralBodyMinimumAltitude, LODNegativeToleranceOverDistance * length(position.xyz));
     
     //
     // Move vertex down. This is not required if it belongs to a top
@@ -22,6 +21,5 @@ void main() {
     // Moving the vertex down is a function of the view parameters so
     // it is done here to avoid buring CPU time.
     //
-    //gl_Position = czm_modelViewProjectionRelativeToEye * (position + vec4(normal * delta, 0));
-    gl_Position = czm_modelViewProjectionRelativeToEye * position;
+    gl_Position = czm_modelViewProjectionRelativeToEye * (position + vec4(normal * delta, 0));
 }

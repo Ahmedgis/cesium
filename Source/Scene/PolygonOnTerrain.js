@@ -66,10 +66,10 @@ define([
         this._sp = undefined;
         this._rs = undefined;
 
-        this._zFailCommands = [];
-        this._zPassCommands = [];
-        this._colorInsideSphereCommands = [];
-        this._colorOutsideSphereCommands = [];
+        this._zFailCommand = undefined;
+        this._zPassCommand = undefined;
+        this._colorInsideSphereCommand = undefined;
+        this._colorOutsideSphereCommand = undefined;
     };
 
     var attributeLocations = {
@@ -164,12 +164,12 @@ define([
             topPosition = Cartesian3.multiplyByScalar(normal, upDelta, scratchDeltaNormal);
             Cartesian3.add(position, topPosition, topPosition);
 
-            EncodedCartesian3.writeElements(topPosition, vbPositions, index);
-            EncodedCartesian3.writeElements(position, vbPositions, index + 6);
+            EncodedCartesian3.writeElements(position, vbPositions, index);
+            EncodedCartesian3.writeElements(topPosition, vbPositions, index + 6);
             index += 12;
 
-            Cartesian3.pack(Cartesian3.ZERO, vbNormals, normalIndex);
-            Cartesian3.pack(normal, vbNormals, normalIndex + 3);
+            Cartesian3.pack(normal, vbNormals, normalIndex);
+            Cartesian3.pack(Cartesian3.ZERO, vbNormals, normalIndex + 3);
             normalIndex += 6;
         }
 
@@ -216,9 +216,9 @@ define([
             i1 = bottomIndices[i + 1] * 2;
             i2 = bottomIndices[i + 2] * 2;
 
-            ibIndices[index++] = i0;
-            ibIndices[index++] = i1;
             ibIndices[index++] = i2;
+            ibIndices[index++] = i1;
+            ibIndices[index++] = i0;
         }
 
         for (i = 0; i < numBottomIndices; i += 3) {
@@ -226,9 +226,9 @@ define([
             i1 = bottomIndices[i + 1] * 2;
             i2 = bottomIndices[i + 2] * 2;
 
-            ibIndices[index++] = i2 + 1;
-            ibIndices[index++] = i1 + 1;
             ibIndices[index++] = i0 + 1;
+            ibIndices[index++] = i1 + 1;
+            ibIndices[index++] = i2 + 1;
         }
 
         var offset = numCapVertices;
@@ -272,36 +272,12 @@ define([
 
         polygon._va = context.createVertexArray(attributes, indexBuffer);
 
-        polygon._topCapOffset = 0;
-        polygon._topCapCount = numBottomIndices;
-        polygon._bottomCapOffset = numBottomIndices;
+        polygon._bottomCapOffset = 0;
         polygon._bottomCapCount = numBottomIndices;
+        polygon._topCapOffset = numBottomIndices;
+        polygon._topCapCount = numBottomIndices;
         polygon._wallOffset = numCapIndices;
         polygon._wallCount = numWallIndices;
-
-        // TODO
-        var capsAndWalls = [{
-            offset : 0,
-            count : numCapIndices,
-            primitiveType : PrimitiveType.TRIANGLES
-        }];
-
-        var topCapAndWalls = [{
-            offset : 0,
-            count : numCapIndices / 2,
-            primitiveType : PrimitiveType.TRIANGLES
-        }];
-
-        walls = {
-            offset : numCapIndices,
-            count : numWallIndices,
-            primitiveType : PrimitiveType.TRIANGLES
-        };
-        capsAndWalls.push(walls);
-        topCapAndWalls.push(walls);
-
-        polygon._capsAndWalls = capsAndWalls;
-        polygon._topCapAndWalls = topCapAndWalls;
     }
 
     PolygonOnTerrain.prototype.update = function(context, frameState, commandList) {
@@ -314,7 +290,7 @@ define([
             this._sp = context.createShaderProgram(ShadowVolumeVS, ShadowVolumeFS, attributeLocations);
         }
 
-        if (this._zFailCommands.length === 0) {
+        if (!defined(this._zFailCommand)) {
             var uniformMap = {
                 centralBodyMinimumAltitude : function() {
                     return -8500.0;
@@ -356,23 +332,16 @@ define([
                 depthMask : false
             });
 
-            var commands = this._capsAndWalls;
-            var commandsLength = commands.length;
-            var j;
-            for (j = 0; j < commandsLength; ++j) {
-                this._zFailCommands.push(new DrawCommand({
-                    primitiveType : commands[j].primitiveType,
-                    offset : commands[j].offset,
-                    count : commands[j].count,
-                    vertexArray : this._va,
-                    renderState : zFailRenderState,
-                    shaderProgram : this._sp,
-                    uniformMap : uniformMap,
-                    owner : this,
-                    modelMatrix : Matrix4.IDENTITY,
-                    pass : Pass.TRANSLUCENT
-                }));
-            }
+            this._zFailCommand = new DrawCommand({
+                primitiveType : PrimitiveType.TRIANGLES,
+                vertexArray : this._va,
+                renderState : zFailRenderState,
+                shaderProgram : this._sp,
+                uniformMap : uniformMap,
+                owner : this,
+                modelMatrix : Matrix4.IDENTITY,
+                pass : Pass.TRANSLUCENT
+            });
 
             var zPassRenderState = context.createRenderState({
                 colorMask : disableColorWrites,
@@ -399,22 +368,18 @@ define([
                 depthMask : false
             });
 
-            commands = this._topCapAndWalls;
-            commandsLength = commands.length;
-            for (j = 0; j < commandsLength; ++j) {
-                this._zPassCommands.push(new DrawCommand({
-                    primitiveType : commands[j].primitiveType,
-                    offset : commands[j].offset,
-                    count : commands[j].count,
-                    vertexArray : this._va,
-                    renderState : zPassRenderState,
-                    shaderProgram : this._sp,
-                    uniformMap : uniformMap,
-                    owner : this,
-                    modelMatrix : Matrix4.IDENTITY,
-                    pass : Pass.TRANSLUCENT
-                }));
-            }
+            this._zPassCommand = new DrawCommand({
+                primitiveType : PrimitiveType.TRIANGLES,
+                offset : this._topCapOffset,
+                count : this._topCapCount + this._wallCount,
+                vertexArray : this._va,
+                renderState : zPassRenderState,
+                shaderProgram : this._sp,
+                uniformMap : uniformMap,
+                owner : this,
+                modelMatrix : Matrix4.IDENTITY,
+                pass : Pass.TRANSLUCENT
+            });
 
             var colorStencilTest = {
                 //enabled : true,
@@ -443,22 +408,16 @@ define([
                 depthMask : false
             });
 
-            commands = this._capsAndWalls;
-            commandsLength = commands.length;
-            for (j = 0; j < commandsLength; ++j) {
-                this._colorInsideSphereCommands.push(new DrawCommand({
-                    primitiveType : commands[j].primitiveType,
-                    offset : commands[j].offset,
-                    count : commands[j].count,
-                    vertexArray : this._va,
-                    renderState : colorInsideSphereRenderState,
-                    shaderProgram : this._sp,
-                    uniformMap : uniformMap,
-                    owner : this,
-                    modelMatrix : Matrix4.IDENTITY,
-                    pass : Pass.TRANSLUCENT
-                }));
-            }
+            this._colorInsideCommand = new DrawCommand({
+                primitiveType : PrimitiveType.TRIANGLES,
+                vertexArray : this._va,
+                renderState : colorInsideSphereRenderState,
+                shaderProgram : this._sp,
+                uniformMap : uniformMap,
+                owner : this,
+                modelMatrix : Matrix4.IDENTITY,
+                pass : Pass.TRANSLUCENT
+            });
 
             var colorOutsideSphereRenderState = context.createRenderState({
                 stencilTest : colorStencilTest,
@@ -472,41 +431,25 @@ define([
                 depthMask : false
             });
 
-            commands = this._topCapAndWalls;
-            commandsLength = commands.length;
-            for (j = 0; j < commandsLength; ++j) {
-                this._colorOutsideSphereCommands.push(new DrawCommand({
-                    primitiveType : commands[j].primitiveType,
-                    offset : commands[j].offset,
-                    count : commands[j].count,
-                    vertexArray : this._va,
-                    renderState : colorOutsideSphereRenderState,
-                    shaderProgram : this._sp,
-                    uniformMap : uniformMap,
-                    owner : this,
-                    modelMatrix : Matrix4.IDENTITY,
-                    pass : Pass.TRANSLUCENT
-                }));
-            }
+            this._colorOutsideSphereCommand = new DrawCommand({
+                primitiveType : PrimitiveType.TRIANGLES,
+                offset : this._topCapOffset,
+                count : this._topCapCount + this._wallCount,
+                vertexArray : this._va,
+                renderState : colorOutsideSphereRenderState,
+                shaderProgram : this._sp,
+                uniformMap : uniformMap,
+                owner : this,
+                modelMatrix : Matrix4.IDENTITY,
+                pass : Pass.TRANSLUCENT
+            });
         }
 
         var pass = frameState.passes;
         if (pass.render) {
             // intersects near/far plane: z-fail else z-pass
             // inside bounding sphere : colorInsideSphere commands else color outside
-
-            var k;
-            var stencilPassCommands = this._zPassCommands;
-            var stencilPassCommandsLength = stencilPassCommands.length;
-            for (k = 0; k < stencilPassCommandsLength; ++k) {
-                commandList.push(stencilPassCommands[k]);
-            }
-
-            var colorPassCommands = this._colorOutsideSphereCommands;
-            var colorPassCommandsLength = colorPassCommands.length;
-            for (k = 0; k < colorPassCommandsLength; ++k) {
-                commandList.push(colorPassCommands[k]);
-            }
+            commandList.push(this._zPassCommand, this._colorOutsideSphereCommand);
         }
     };
 

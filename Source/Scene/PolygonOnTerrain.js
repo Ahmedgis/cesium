@@ -1,6 +1,8 @@
 /*global define*/
 define([
+        '../Core/Cartesian2',
         '../Core/Cartesian3',
+        '../Core/Cartesian4',
         '../Core/ComponentDatatype',
         '../Core/defaultValue',
         '../Core/defined',
@@ -13,6 +15,7 @@ define([
         '../Core/PolygonGeometryLibrary',
         '../Core/PolygonPipeline',
         '../Core/PrimitiveType',
+        '../Core/SphericalExtent',
         '../Core/WindingOrder',
         '../Renderer/BufferUsage',
         '../Renderer/DrawCommand',
@@ -25,7 +28,9 @@ define([
         './StencilFunction',
         './StencilOperation'
     ], function(
+        Cartesian2,
         Cartesian3,
+        Cartesian4,
         ComponentDatatype,
         defaultValue,
         defined,
@@ -38,6 +43,7 @@ define([
         PolygonGeometryLibrary,
         PolygonPipeline,
         PrimitiveType,
+        SphericalExtent,
         WindingOrder,
         BufferUsage,
         DrawCommand,
@@ -62,9 +68,56 @@ define([
         this._granularity = granularity;
         this._polygonHierarchy = polygonHierarchy;
 
+        this._northPlane = new Cartesian4();
+        this._southPlane = new Cartesian4();
+        this._eastPlane = new Cartesian4();
+        this._westPlane = new Cartesian4();
+
+        this._sinCosDeltas = new Cartesian4();
+        this._centerAzimuthAndInverseDeltas = new Cartesian4();
+
+        this._centerAzimuthFromWest = 0.0;
+
         this._va = undefined;
         this._sp = undefined;
         this._rs = undefined;
+
+        this._fbo = undefined;
+        this._depthTexture = undefined;
+
+        var that = this;
+        this._uniformMap = {
+            centralBodyMinimumAltitude : function() {
+                return -8500.0;
+            },
+            LODNegativeToleranceOverDistance : function() {
+                return -0.01;
+            },
+            northPlane : function() {
+                return that._northPlane;
+            },
+            southPlane : function() {
+                return that._southPlane;
+            },
+            eastPlane : function() {
+                return that._eastPlane;
+            },
+            westPlane : function() {
+                return that._westPlane;
+            },
+            sinCosDeltas : function () {
+                return that._sinCosDeltas;
+            },
+            centerAzimuthAndInverseDeltas : function () {
+                return that._centerAzimuthAndInverseDeltas;
+            },
+            centerAzimuthFromWest : function () {
+                return that._centerAzimuthFromWest;
+            },
+            depthTexture : function() {
+                return that._depthTexture;
+            }
+        };
 
         this._zFailCommand = undefined;
         this._zPassCommand = undefined;
@@ -282,6 +335,188 @@ define([
         polygon._wallCount = numWallIndices;
     }
 
+    function latitudePlane(north, theta, xy, z, center, plane) {
+        var normal = scratchNormal;
+        if (xy !== 0.0)
+        {
+            var tempVec0 = Cartesian3.fromElements(Math.cos(theta)* xy, Math.sin(theta) * xy, z);
+            var tempVec1 = Cartesian3.fromElements(tempVec0.y, -tempVec0.x, 0.0);
+            if (north)
+            {
+                Cartesian3.cross(tempVec0, tempVec1, normal);
+            }
+            else
+            {
+                Cartesian3.cross(tempVec1, tempVec0, normal);
+            }
+        }
+        else
+        {
+            normal.x = center.x;
+            normal.y = center.y;
+            normal.z = 0.0;
+        }
+        Cartesian3.normalize(normal, normal);
+        plane.x = normal.x;
+        plane.y = normal.y;
+        plane.z = normal.z;
+        plane.w = Cartesian3.dot(normal, center);
+    }
+
+    var scratchPlane = new Cartesian4();
+    var scratchPlaneRotated = new Cartesian4();
+
+    function computeTextureCoordinates(polygon) {
+        var polygonHierarchy = polygon._polygonHierarchy;
+        var outerRing = polygonHierarchy.positions;
+
+        var center = polygon._boundingSphere.center;
+
+        var sphericalExtent = SphericalExtent.fromPositions(outerRing);
+        var minimumLatitude = sphericalExtent.minimumLatitude;
+        var minimumLongitude = sphericalExtent.minimumLongitude;
+        var latitudeExtent = sphericalExtent.latitudeExtent;
+        var longitudeExtent = sphericalExtent.longitudeExtent;
+
+        //
+        // West plane
+        //
+        var westPlane = polygon._westPlane;
+        westPlane.x = -Math.sin(minimumLongitude);
+        westPlane.y = Math.cos(minimumLongitude);
+        westPlane.z = 0.0;
+        westPlane.w = (westPlane.x * center.x) + (westPlane.y * center.y) + (westPlane.z * center.z);
+
+        //
+        // East plane
+        //
+        var eastPlane = polygon._eastPlane;
+        var tempDouble = minimumLongitude + longitudeExtent;
+        eastPlane.x = Math.sin(tempDouble);
+        eastPlane.y = -Math.cos(tempDouble);
+        eastPlane.z = 0.0;
+        eastPlane.w = (eastPlane.x * center.x) + (eastPlane.y * center.y) + (eastPlane.z * center.z);
+
+        //
+        // Sin and cos lon/lat deltas
+        //
+        var sinCosDeltas = polygon._sinCosDeltas;
+        sinCosDeltas.x = Math.sin(longitudeExtent);
+        sinCosDeltas.y = Math.cos(longitudeExtent);
+        sinCosDeltas.z = Math.sin(latitudeExtent);
+        sinCosDeltas.w = Math.cos(latitudeExtent);
+
+        //
+        // Center azimuth
+        //
+        var centerAzimuth = Cartesian2.fromElements(center.x, center.y);
+        Cartesian2.normalize(centerAzimuth, centerAzimuth);
+        var centerAzimuthAndInverseDeltas = polygon._centerAzimuthAndInverseDeltas;
+        centerAzimuthAndInverseDeltas.x = centerAzimuth.x;
+        centerAzimuthAndInverseDeltas.y = centerAzimuth.y;
+
+        //
+        // Inverse deltas
+        //
+        /*
+        if (volue is medium or small)
+        {
+            //
+            // When both extents are sufficiently small, the shader approximates arctan and
+            // tan to be the same; due to differences, the extents must be increased slightly
+            //
+            centerAzimuthAndInverseDeltas.z = 1.0 / Math.tan(longitudeExtent);
+            centerAzimuthAndInverseDeltas.w = 1.0 / Math.tan(latitudeExtent);
+            var azimuthXY = Cartesian2.fromElements(centerAzimuthAndInverseDeltas.x, centerAzimuthAndInverseDeltas.y);
+            Cartesian2.normalize(azimuthXY, azimuthXY);
+            var westXY = Cartesian2.fromElements(westPlane.y, -westPlane.x);
+            Cartesian2.normalize(westXY, westXY);
+            polygon._centerAzimuthFromWest = Math.acos(Cartesian2.dot(azimuthXY, westXY));
+        }
+        else
+        {
+        */
+            centerAzimuthAndInverseDeltas.z = 1.0 / longitudeExtent;
+            centerAzimuthAndInverseDeltas.w = 1.0 / latitudeExtent;
+            polygon._centerAzimuthFromWest = 0.0;
+        //}
+
+        //
+        // North/South plane - for small volumes the north and south planes are calculated
+        // once. They are approximations that improve frame rate at the slight cost
+        // of visual quality.  For larger volumes, the pixel shader calculates the
+        // planes on the fly using data calculated below.  This is slower but is
+        // necessary to preserve visual quality.
+        //
+        // North plane
+        //
+        var northPlane = polygon._northPlane;
+        var centerAzimuthAngle = Math.atan2(centerAzimuth.y, centerAzimuth.x);
+        var z = Math.sin(minimumLatitude + latitudeExtent);
+        var xy = 1.0 - z * z;
+        xy = (xy < 0.0) ? 0.0 : Math.sqrt(xy);
+
+        var plane = scratchPlane;
+        var planeRotated180Degs = scratchPlaneRotated;
+        latitudePlane(true, centerAzimuthAngle, xy, z, center, plane);
+
+        /*
+        if (volume is small)
+        {
+            northPlane.x = plane.x;
+            northPlane.y = plane.y;
+            northPlane.z = plane.z;
+            northPlane.w = (northPlane.x * center.x) + (northPlane.y * center.y) + (northPlane.z * center.z);
+        }
+        else
+        {
+        */
+            latitudePlane(true, centerAzimuthAngle + Math.PI, xy, z, center, planeRotated180Degs);
+            xy = 1.0 - plane.z * plane.z;
+            xy = (xy > 0.0) ? Math.sqrt(xy) : 0.0;
+            if (minimumLatitude + latitudeExtent < 0.0)
+            {
+                xy = -xy;
+            }
+            northPlane.x = plane.z;
+            northPlane.y = xy;
+            northPlane.z = planeRotated180Degs.w;
+            northPlane.w = plane.w - planeRotated180Degs.w;
+        //}
+
+        //
+        // South plane
+        //
+        var southPlane = polygon._southPlane;
+        z = Math.sin(minimumLatitude);
+        xy = 1.0 - z * z;
+        xy = (xy < 0.0) ? 0.0 : Math.sqrt(xy);
+        latitudePlane(false, centerAzimuthAngle, xy, z, center, plane);
+        /*
+        if (volume is small)
+        {
+            southPlane.x = plane.x;
+            southPlane.y = plane.y;
+            southPlane.z = plane.z;
+            southPlane.w = (southPlane.x * center.x) + (southPlane.y * center.y) + (southPlane.z * center.z);
+        }
+        else
+        {
+        */
+            latitudePlane(false, centerAzimuthAngle + Math.PI, xy, z, center, planeRotated180Degs);
+            xy = 1.0 - plane.z * plane.z;
+            xy = (xy > 0.0) ? Math.sqrt(xy) : 0.0;
+            if (minimumLatitude > 0.0)
+            {
+                xy = -xy;
+            }
+            southPlane.x = plane.z;
+            southPlane.y = xy;
+            southPlane.z = planeRotated180Degs.w;
+            southPlane.w = plane.w - planeRotated180Degs.w;
+        //}
+    }
+
     PolygonOnTerrain.prototype.update = function(context, frameState, commandList) {
         var fbo = this._scene._oit._opaqueFBO;
         if (!defined(fbo)) {
@@ -290,6 +525,7 @@ define([
 
         if (!defined(this._va)) {
             createShadowVolume(this, context);
+            computeTextureCoordinates(this);
         }
 
         if (!defined(this._sp)) {
@@ -306,19 +542,6 @@ define([
         }
 
         if (!defined(this._zFailCommand)) {
-            var that = this;
-            var uniformMap = {
-                centralBodyMinimumAltitude : function() {
-                    return -8500.0;
-                },
-                LODNegativeToleranceOverDistance : function() {
-                    return -0.01;
-                },
-                depthTexture : function() {
-                    return that._depthTexture;
-                }
-            };
-
             var disableColorWrites = {
                 red : false,
                 green : false,
@@ -356,7 +579,7 @@ define([
                 vertexArray : this._va,
                 renderState : zFailRenderState,
                 shaderProgram : this._sp,
-                uniformMap : uniformMap,
+                uniformMap : this._uniformMap,
                 owner : this,
                 modelMatrix : Matrix4.IDENTITY,
                 pass : Pass.OPAQUE
@@ -394,7 +617,7 @@ define([
                 vertexArray : this._va,
                 renderState : zPassRenderState,
                 shaderProgram : this._sp,
-                uniformMap : uniformMap,
+                uniformMap : this._uniformMap,
                 owner : this,
                 modelMatrix : Matrix4.IDENTITY,
                 pass : Pass.OPAQUE
@@ -432,7 +655,7 @@ define([
                 vertexArray : this._va,
                 renderState : colorInsideSphereRenderState,
                 shaderProgram : this._sp,
-                uniformMap : uniformMap,
+                uniformMap : this._uniformMap,
                 owner : this,
                 modelMatrix : Matrix4.IDENTITY,
                 pass : Pass.OPAQUE
@@ -458,7 +681,7 @@ define([
                 vertexArray : this._va,
                 renderState : colorOutsideSphereRenderState,
                 shaderProgram : this._sp,
-                uniformMap : uniformMap,
+                uniformMap : this._uniformMap,
                 owner : this,
                 modelMatrix : Matrix4.IDENTITY,
                 pass : Pass.OPAQUE
